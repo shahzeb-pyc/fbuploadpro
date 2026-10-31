@@ -35,6 +35,7 @@ import { EmptyState } from '@/components/shared/ui/empty-state';
 import { Skeleton } from '@/components/shared/ui/skeleton';
 import { BillingStatusMark } from './billing-status-mark';
 import { CouponSection } from './coupon-section';
+import { RefundSection } from './refund-section';
 
 const PLATFORM_LABELS: Record<keyof PlatformCounts, string> = {
   facebook: 'Facebook',
@@ -1398,6 +1399,11 @@ export function BillingView({
           ))}
         </CardContent>
       </Card>
+
+      {/* Refund section: renders nothing unless the user is eligible or
+          has past refund requests — the button appears only when the
+          server says eligible. */}
+      <RefundSection subdomain={subdomain} />
 
       <div>
         <Button onClick={goToPurchase}>Buy or upgrade</Button>

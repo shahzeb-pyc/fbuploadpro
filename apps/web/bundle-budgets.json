@@ -488,9 +488,9 @@
       },
       "/tenant/[subdomain]/billing": {
         "firstLoadGzipBytes": 176478,
-        "firstLoadRawBytes": 599680,
-        "routeSpecificGzipBytes": 39723,
-        "routeSpecificRawBytes": 154774
+        "firstLoadRawBytes": 642966,
+        "routeSpecificGzipBytes": 43378,
+        "routeSpecificRawBytes": 169521
       },
       "/tenant/[subdomain]/creator-finder": {
         "firstLoadGzipBytes": 175174,

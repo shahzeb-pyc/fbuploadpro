@@ -6,6 +6,8 @@
 export {
   AdminDecisionRequestSchema,
   AdminPaymentsResponseSchema,
+  AdminRefundDecisionSchema,
+  AdminRefundsResponseSchema,
   BillingPaymentItemSchema,
   BillingStatusResponseSchema,
   CreateBankPaymentRequestSchema,
@@ -14,7 +16,10 @@ export {
   EntitlementResponseSchema,
   MediaStorageResponseSchema,
   PlatformCountsSchema,
+  RefundRequestCreateSchema,
+  RefundRequestItemSchema,
   UsageRegisterRequestSchema,
+  UserRefundsResponseSchema,
 } from '@fbuploadpro/contracts';
 export {
   CouponRedemptionsResponseSchema,
@@ -26,6 +31,8 @@ export {
 } from '@fbuploadpro/contracts';
 export type {
   AdminPaymentsResponse,
+  AdminRefundItem,
+  AdminRefundsResponse,
   BillingStatusResponse,
   Coupon,
   CouponRedemption,
@@ -36,5 +43,8 @@ export type {
   EntitlementResponse,
   MediaStorageResponse,
   PlatformCounts,
+  RefundEligibility,
+  RefundRequestItem,
+  UserRefundsResponse,
   ZeroDueCheckoutResponse,
 } from '@fbuploadpro/contracts';

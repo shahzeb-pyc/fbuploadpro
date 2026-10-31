@@ -15,6 +15,7 @@ import { EmptyState } from '@/components/shared/ui/empty-state';
 import { Skeleton } from '@/components/shared/ui/skeleton';
 import { BillingStatusMark } from './billing-status-mark';
 import { AdminCouponsView } from './admin-coupons-view';
+import { AdminRefundsView } from './admin-refunds-view';
 
 function countsSummary(counts: AdminPaymentsResponse['payments'][number]['counts']): string {
   const parts: string[] = [];
@@ -308,6 +309,8 @@ export function AdminApprovalsView({ subdomain }: Readonly<{ subdomain: string }
           </Card>
         ))}
       </section>
+
+      <AdminRefundsView subdomain={subdomain} />
     </div>
   );
 }

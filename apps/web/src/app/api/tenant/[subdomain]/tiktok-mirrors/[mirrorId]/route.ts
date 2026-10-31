@@ -28,7 +28,7 @@ import type { DatabaseClient } from '@fbuploadpro/contracts';
 
 type Db = SupabaseClient | DatabaseClient;
 
-async function loadMirror(
+export async function loadMirror(
   db: Db,
   workspaceId: string,
   mirrorId: string
@@ -57,7 +57,7 @@ async function loadMirror(
   return asMirrorRow(data);
 }
 
-async function authenticate(
+export async function authenticate(
   request: NextRequest,
   subdomain: string,
   dbClient?: Db

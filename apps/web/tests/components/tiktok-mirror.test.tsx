@@ -24,6 +24,7 @@ vi.mock('@/components/pages/dedicated/insights-panel', () => ({
 
 const apiGetMock = vi.fn();
 const apiPatchMock = vi.fn();
+const apiPostMock = vi.fn();
 vi.mock('@/lib/api', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/lib/api')>();
   return {
@@ -32,6 +33,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       ...original.api,
       get: (...args: unknown[]) => apiGetMock(...args),
       patch: (...args: unknown[]) => apiPatchMock(...args),
+      post: (...args: unknown[]) => apiPostMock(...args),
       delete: vi.fn(),
     },
   };
@@ -241,5 +243,128 @@ describe('TikTok dedicated view', () => {
     expect(await screen.findByTestId('tiktok-detail-page')).toBeTruthy();
     expect(screen.getByText(/can't post right now/)).toBeTruthy();
     expect(screen.queryByText(raw)).toBeNull();
+  });
+});
+
+describe('TikTok mirror history retry button', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const POST_ID = '55555555-5555-4555-a555-555555555555';
+  const MIRROR_ID = '44444444-4444-4444-a444-444444444444';
+
+  const retryDetailResponse = (
+    postOverrides: Record<string, unknown> = {},
+    mirrorOverrides: Record<string, unknown> = {}
+  ) => ({
+    mirror: mirrorView(mirrorOverrides),
+    posts: [
+      {
+        id: POST_ID,
+        mirror_id: MIRROR_ID,
+        source_post_id: 'v1',
+        caption: 'My exact caption',
+        video_url: 'https://example.com/v1.mp4',
+        cover_url: null,
+        source_created_at: '2026-10-29T10:00:00.000Z',
+        status: 'pending',
+        published_post_id: null,
+        error: 'A previous failure',
+        created_at: '2026-10-29T10:00:00.000Z',
+        ...postOverrides,
+      },
+    ],
+  });
+
+  const renderDetail = () =>
+    renderWithQuery(<TikTokDetailShell subdomain="acme" mirrorId={MIRROR_ID} />);
+
+  it('shows Retry only on pending posts, and only for Facebook/Instagram targets', async () => {
+    apiGetMock.mockResolvedValue(retryDetailResponse());
+    const first = renderDetail();
+    expect(
+      await screen.findByTestId(`tiktok-retry-btn-${POST_ID}`)
+    ).toBeTruthy();
+    first.unmount();
+
+    apiGetMock.mockResolvedValue(
+      retryDetailResponse({ status: 'posted', published_post_id: 'fb_post_1', error: null })
+    );
+    renderDetail();
+    await screen.findByTestId('tiktok-detail-page');
+    expect(screen.queryByTestId(`tiktok-retry-btn-${POST_ID}`)).toBeNull();
+  });
+
+  it('shows Retry for a pending Instagram post but not for an unsupported target', async () => {
+    apiGetMock.mockResolvedValue(
+      retryDetailResponse({}, { targetPlatform: 'instagram' })
+    );
+    const first = renderDetail();
+    expect(
+      await screen.findByTestId(`tiktok-retry-btn-${POST_ID}`)
+    ).toBeTruthy();
+    first.unmount();
+
+    apiGetMock.mockResolvedValue(
+      retryDetailResponse({}, { targetPlatform: 'threads' })
+    );
+    renderDetail();
+    await screen.findByTestId('tiktok-detail-page');
+    expect(screen.queryByTestId(`tiktok-retry-btn-${POST_ID}`)).toBeNull();
+  });
+
+  it('calls the retry endpoint on click and refetches the detail on success', async () => {
+    const user = userEvent.setup();
+    apiGetMock.mockResolvedValue(retryDetailResponse());
+    apiPostMock.mockResolvedValue({
+      post: { id: POST_ID, status: 'posted', publishedPostId: 'fb_post_999', error: null },
+    });
+    renderDetail();
+    const button = await screen.findByTestId(`tiktok-retry-btn-${POST_ID}`);
+    await user.click(button);
+    await waitFor(() =>
+      expect(apiPostMock).toHaveBeenCalledWith(
+        `/api/tenant/acme/tiktok-mirrors/${MIRROR_ID}/posts/${POST_ID}/retry`,
+        {},
+        expect.objectContaining({ schema: expect.anything() })
+      )
+    );
+    await waitFor(() => expect(apiGetMock.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it('disables the button with Retrying… while the retry is in flight', async () => {
+    const user = userEvent.setup();
+    apiGetMock.mockResolvedValue(retryDetailResponse());
+    let resolvePost: (value: unknown) => void = () => {};
+    apiPostMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePost = resolve;
+        })
+    );
+    renderDetail();
+    const button = await screen.findByTestId(`tiktok-retry-btn-${POST_ID}`);
+    await user.click(button);
+    await waitFor(() => expect(button).toHaveProperty('disabled', true));
+    expect(button.textContent).toBe('Retrying…');
+    resolvePost({
+      post: { id: POST_ID, status: 'posted', publishedPostId: 'fb_post_999', error: null },
+    });
+    await waitFor(() => expect(button).toHaveProperty('disabled', false));
+    expect(button.textContent).toBe('Retry');
+  });
+
+  it('refetches the detail when the retry outcome stays pending (failure shows on the row)', async () => {
+    const user = userEvent.setup();
+    apiGetMock.mockResolvedValue(retryDetailResponse());
+    apiPostMock.mockResolvedValue({
+      post: { id: POST_ID, status: 'pending', publishedPostId: null, error: 'Facebook rejected this reel.' },
+    });
+    renderDetail();
+    const button = await screen.findByTestId(`tiktok-retry-btn-${POST_ID}`);
+    await user.click(button);
+    await waitFor(() => expect(apiPostMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(apiGetMock.mock.calls.length).toBeGreaterThan(1));
   });
 });

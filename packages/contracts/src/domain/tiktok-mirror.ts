@@ -307,3 +307,21 @@ export const DeleteMirrorResponseSchema = z.object({
   deleted: z.boolean(),
 });
 export type DeleteMirrorResponse = z.infer<typeof DeleteMirrorResponseSchema>;
+
+/**
+ * POST …/tiktok-mirrors/[mirrorId]/posts/[postId]/retry response.
+ * A failed publish is a business outcome, not a transport error, so
+ * it rides a 200 outcome body (same shape as setup's failed
+ * immediate post): the row stays `pending` with the message, and
+ * the UI shows that message. Success is `posted` with the new
+ * platform post id.
+ */
+export const RetryMirrorPostResponseSchema = z.object({
+  post: z.object({
+    id: z.string().uuid(),
+    status: z.enum(['posted', 'pending']),
+    publishedPostId: z.string().nullable(),
+    error: z.string().nullable(),
+  }),
+});
+export type RetryMirrorPostResponse = z.infer<typeof RetryMirrorPostResponseSchema>;

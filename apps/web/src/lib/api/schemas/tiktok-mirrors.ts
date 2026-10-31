@@ -20,6 +20,7 @@ export {
   MirrorRowSchema,
   MirrorStatusSchema,
   MirrorViewSchema,
+  RetryMirrorPostResponseSchema,
   UpdateMirrorRequestSchema,
   type CreateMirrorRequest,
   type CreateMirrorResponse,
@@ -31,6 +32,7 @@ export {
   type MirrorRow,
   type MirrorStatus,
   type MirrorView,
+  type RetryMirrorPostResponse,
   type UpdateMirrorRequest,
 } from '@fbuploadpro/contracts';
 

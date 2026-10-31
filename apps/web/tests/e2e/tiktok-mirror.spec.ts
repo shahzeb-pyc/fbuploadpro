@@ -162,4 +162,81 @@ test.describe('tiktok mirrors section (phone width)', () => {
     await expect(page.getByTestId('tiktok-detail-page')).toBeVisible();
     await assertNoHorizontalOverflow(page);
   });
+
+  test('pending post shows Retry at phone width; click posts it, no overflow', async ({
+    page,
+    context,
+  }) => {
+    await context.addCookies([SESSION_COOKIE]);
+    await installApiFixtures(page, createFixtureState());
+    // Stateful detail: the post is pending until the retry POST flips it.
+    let postStatus = 'pending';
+    let publishedPostId: string | null = null;
+    let postError: string | null = 'A previous failure';
+    await page.route(
+      (url) => url.pathname === `/api/tenant/${SUB}/tiktok-mirrors/${MIRROR_ID}`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            mirror: mirrorView(),
+            posts: [
+              {
+                id: '55555555-5555-4555-a555-555555555555',
+                mirror_id: MIRROR_ID,
+                source_post_id: 'v1',
+                caption: 'My exact caption',
+                video_url: 'https://example.com/v1.mp4',
+                cover_url: null,
+                source_created_at: '2026-10-29T10:00:00.000Z',
+                status: postStatus,
+                published_post_id: publishedPostId,
+                error: postError,
+                created_at: '2026-10-29T10:00:00.000Z',
+              },
+            ],
+          }),
+        });
+      }
+    );
+    await page.route(
+      (url) =>
+        url.pathname ===
+        `/api/tenant/${SUB}/tiktok-mirrors/${MIRROR_ID}/posts/55555555-5555-4555-a555-555555555555/retry`,
+      async (route) => {
+        postStatus = 'posted';
+        publishedPostId = 'fb_post_999';
+        postError = null;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            post: {
+              id: '55555555-5555-4555-a555-555555555555',
+              status: 'posted',
+              publishedPostId: 'fb_post_999',
+              error: null,
+            },
+          }),
+        });
+      }
+    );
+    await page.goto(`/tenant/${SUB}/tiktok-mirrors/${MIRROR_ID}`);
+    await expect(page.getByTestId('tiktok-detail-page')).toBeVisible({ timeout: 15_000 });
+    const retryBtn = page.getByTestId(
+      'tiktok-retry-btn-55555555-5555-4555-a555-555555555555'
+    );
+    await expect(retryBtn).toBeVisible();
+    await expect(retryBtn).toHaveText('Retry');
+    await assertNoHorizontalOverflow(page);
+
+    await retryBtn.click();
+    // After success + refetch, the row reads Posted and the button is gone.
+    await expect(
+      page.getByTestId('tiktok-history-item-55555555-5555-4555-a555-555555555555')
+    ).toContainText('Posted');
+    await expect(retryBtn).toHaveCount(0);
+    await assertNoHorizontalOverflow(page);
+  });
 });

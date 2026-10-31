@@ -14,6 +14,7 @@ import {
   handleListMirrors,
 } from '../../src/app/api/tenant/[subdomain]/tiktok-mirrors/route';
 import { handleUpdateMirror } from '../../src/app/api/tenant/[subdomain]/tiktok-mirrors/[mirrorId]/route';
+import { handleRetryMirrorPost } from '../../src/app/api/tenant/[subdomain]/tiktok-mirrors/[mirrorId]/posts/[postId]/retry/route';
 import { TikwmError } from '../../src/lib/server/tikwm';
 import type { DatabaseClient } from '@fbuploadpro/contracts';
 
@@ -91,6 +92,31 @@ interface FakeDbOptions {
   mirrorRowOverride?: Record<string, unknown>;
   /** Full mirror set for pagination tests; the list branch slices it by LIMIT/OFFSET. */
   mirrorRows?: Record<string, unknown>[];
+  /** Retry tests: the mirror row is missing (foreign workspace reads as not found). */
+  mirrorMissing?: boolean;
+  /** Retry tests: the post row is missing. */
+  postMissing?: boolean;
+  /** Retry tests: no destination row for the mirror target (missing token). */
+  destinationMissing?: boolean;
+  /** Retry tests: overrides for the pending post row. */
+  postRowOverride?: Record<string, unknown>;
+}
+
+function postRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: postId,
+    mirror_id: mirrorId,
+    source_post_id: 'v1',
+    caption: 'My exact caption',
+    video_url: 'https://example.com/v1.mp4',
+    cover_url: null,
+    source_created_at: '2026-10-29T10:00:00.000Z',
+    status: 'pending',
+    published_post_id: null,
+    error: 'A previous failure',
+    created_at: '2026-10-29T10:00:00.000Z',
+    ...overrides,
+  };
 }
 
 /** Legacy-path fake DB dispatching on SQL content. */
@@ -127,7 +153,9 @@ function fakeDb(options: FakeDbOptions = {}) {
         return Promise.resolve([{ id: postId }]);
       }
       if (sql.includes('FROM mirrors WHERE id = $1')) {
-        return Promise.resolve([mirrorRow(options.mirrorRowOverride ?? {})]);
+        return Promise.resolve(
+          options.mirrorMissing ? [] : [mirrorRow(options.mirrorRowOverride ?? {})]
+        );
       }
       if (sql.includes('COUNT(*)')) {
         const rows = options.mirrorRows ?? [mirrorRow()];
@@ -140,7 +168,12 @@ function fakeDb(options: FakeDbOptions = {}) {
         return Promise.resolve(rows.slice(offset, offset + limit));
       }
       if (sql.includes('FROM destinations WHERE workspace_id')) {
-        return Promise.resolve([destRow()]);
+        return Promise.resolve(options.destinationMissing ? [] : [destRow()]);
+      }
+      if (sql.includes('FROM mirror_posts WHERE id = $1')) {
+        return Promise.resolve(
+          options.postMissing ? [] : [postRow(options.postRowOverride ?? {})]
+        );
       }
       if (sql.includes('FROM mirror_posts WHERE mirror_id = ANY')) {
         return Promise.resolve([]);
@@ -529,5 +562,217 @@ describe('GET /tiktok-mirrors', () => {
     expect(body.page).toBe(2);
     expect(body.totalPages).toBe(2);
     expect(body.mirrors).toHaveLength(5);
+  });
+});
+
+describe('POST /tiktok-mirrors/[mirrorId]/posts/[postId]/retry', () => {
+  beforeEach(async () => {
+    process.env.SESSION_SECRET = TEST_SECRET;
+    process.env.TOKEN_ENCRYPTION_KEY = TEST_KEY;
+    const token = await signSessionToken(
+      {
+        userId,
+        email: 'alexander@gmail.com',
+        name: 'Alex Acme',
+        subdomain: 'acme',
+        role: 'user',
+        status: 'active',
+      },
+      TEST_SECRET
+    );
+    validSessionCookie = `fbup_session=${token}`;
+    encAccountToken = await encryptToken('acct-token-plain', TEST_KEY);
+    encPageToken = await encryptToken('page-token-plain', TEST_KEY);
+  });
+
+  function retryRequest(cookie = validSessionCookie): NextRequest {
+    return new NextRequest(
+      `http://localhost:3000/api/tenant/acme/tiktok-mirrors/${mirrorId}/posts/${postId}/retry`,
+      { method: 'POST', headers: { cookie } }
+    );
+  }
+
+  it('publishes a pending post with its stored video URL and marks it posted', async () => {
+    const { db, calls } = fakeDb();
+    const publishReel = vi.fn().mockResolvedValue('fb_post_999');
+    const res = await handleRetryMirrorPost(retryRequest(), 'acme', mirrorId, postId, db, {
+      publishReel,
+    } as never);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.post.status).toBe('posted');
+    expect(body.post.publishedPostId).toBe('fb_post_999');
+    expect(body.post.error).toBeNull();
+    expect(publishReel).toHaveBeenCalledWith({
+      pageId: fbPageId,
+      pageToken: 'page-token-plain',
+      videoUrl: 'https://example.com/v1.mp4',
+      caption: 'My exact caption',
+    });
+    const postUpdate = calls.find((c) => c.sql.includes('UPDATE mirror_posts'));
+    expect(postUpdate?.params).toEqual([
+      postId,
+      'posted',
+      'fb_post_999',
+      null,
+      'https://example.com/v1.mp4',
+      'My exact caption',
+    ]);
+    const mirrorUpdate = calls.find((c) => c.sql.includes('UPDATE mirrors'));
+    expect(mirrorUpdate?.params).toEqual([mirrorId, 'active', null]);
+  });
+
+  it('leaves the row pending with the error when publishing fails', async () => {
+    const { db, calls } = fakeDb();
+    const publishReel = vi.fn().mockRejectedValue(new Error('Facebook rejected this reel.'));
+    const res = await handleRetryMirrorPost(retryRequest(), 'acme', mirrorId, postId, db, {
+      publishReel,
+    } as never);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.post.status).toBe('pending');
+    expect(body.post.publishedPostId).toBeNull();
+    expect(body.post.error).toBe('Facebook rejected this reel.');
+    const postUpdate = calls.find((c) => c.sql.includes('UPDATE mirror_posts'));
+    expect(postUpdate?.params).toEqual([
+      postId,
+      'pending',
+      null,
+      'Facebook rejected this reel.',
+      'https://example.com/v1.mp4',
+      'My exact caption',
+    ]);
+    const mirrorUpdate = calls.find((c) => c.sql.includes('UPDATE mirrors'));
+    expect(mirrorUpdate?.params).toEqual([
+      mirrorId,
+      'error',
+      'Facebook rejected this reel.',
+    ]);
+  });
+
+  it('rejects a non-pending post with 409 and never publishes', async () => {
+    const { db } = fakeDb({ postRowOverride: { status: 'posted' } });
+    const publishReel = vi.fn();
+    const res = await handleRetryMirrorPost(retryRequest(), 'acme', mirrorId, postId, db, {
+      publishReel,
+    } as never);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe('NOT_PENDING');
+    expect(publishReel).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for a foreign mirror and a missing post', async () => {
+    const { db } = fakeDb({ mirrorMissing: true });
+    const res = await handleRetryMirrorPost(retryRequest(), 'acme', mirrorId, postId, db);
+    expect(res.status).toBe(404);
+    const { db: db2 } = fakeDb({ postMissing: true });
+    const res2 = await handleRetryMirrorPost(retryRequest(), 'acme', mirrorId, postId, db2);
+    expect(res2.status).toBe(404);
+  });
+
+  it('keeps the row pending with the reconnect message when the token is missing', async () => {
+    const { db, calls } = fakeDb({ destinationMissing: true });
+    const publishReel = vi.fn();
+    const res = await handleRetryMirrorPost(retryRequest(), 'acme', mirrorId, postId, db, {
+      publishReel,
+    } as never);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.post.status).toBe('pending');
+    expect(body.post.error).toContain('Reconnect the page');
+    expect(publishReel).not.toHaveBeenCalled();
+    const postUpdate = calls.find((c) => c.sql.includes('UPDATE mirror_posts'));
+    expect(postUpdate?.params[1]).toBe('pending');
+  });
+
+  it('re-resolves a null video URL before publishing, and persists it', async () => {
+    const { db, calls } = fakeDb({ postRowOverride: { video_url: null } });
+    const publishReel = vi.fn().mockResolvedValue('fb_post_777');
+    const resolveTikwmVideo = vi.fn().mockResolvedValue({
+      playUrl: 'https://example.com/no-wm.mp4',
+      title: 'Resolved title',
+    });
+    const res = await handleRetryMirrorPost(retryRequest(), 'acme', mirrorId, postId, db, {
+      publishReel,
+      resolveTikwmVideo,
+    } as never);
+    expect(res.status).toBe(200);
+    expect((await res.json()).post.status).toBe('posted');
+    expect(resolveTikwmVideo).toHaveBeenCalledWith(
+      'https://www.tiktok.com/@alice/video/v1'
+    );
+    expect(publishReel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        videoUrl: 'https://example.com/no-wm.mp4',
+        caption: 'Resolved title',
+      })
+    );
+    const postUpdate = calls.find((c) => c.sql.includes('UPDATE mirror_posts'));
+    expect(postUpdate?.params).toEqual([
+      postId,
+      'posted',
+      'fb_post_777',
+      null,
+      'https://example.com/no-wm.mp4',
+      'Resolved title',
+    ]);
+  });
+
+  it('keeps the row pending when the re-resolve fails and never publishes', async () => {
+    const { db } = fakeDb({ postRowOverride: { video_url: null } });
+    const publishReel = vi.fn();
+    const resolveTikwmVideo = vi.fn().mockRejectedValue(new Error('Resolve failed.'));
+    const res = await handleRetryMirrorPost(retryRequest(), 'acme', mirrorId, postId, db, {
+      publishReel,
+      resolveTikwmVideo,
+    } as never);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.post.status).toBe('pending');
+    expect(body.post.error).toBe('Resolve failed.');
+    expect(publishReel).not.toHaveBeenCalled();
+  });
+
+  it('publishes an Instagram-target pending post with the account token', async () => {
+    const { db } = fakeDb({
+      mirrorRowOverride: { target_platform: 'instagram', target_external_id: 'ig_123' },
+    });
+    const publishInstagramReel = vi.fn().mockResolvedValue('ig_post_1');
+    const res = await handleRetryMirrorPost(retryRequest(), 'acme', mirrorId, postId, db, {
+      publishInstagramReel,
+    } as never);
+    expect(res.status).toBe(200);
+    expect((await res.json()).post.status).toBe('posted');
+    expect(publishInstagramReel).toHaveBeenCalledWith({
+      igUserId: 'ig_123',
+      accessToken: 'acct-token-plain',
+      videoUrl: 'https://example.com/v1.mp4',
+      caption: 'My exact caption',
+    });
+  });
+
+  it('rejects an unsupported target platform with 400', async () => {
+    const { db } = fakeDb({
+      mirrorRowOverride: { target_platform: 'threads' },
+    });
+    const publishReel = vi.fn();
+    const res = await handleRetryMirrorPost(retryRequest(), 'acme', mirrorId, postId, db, {
+      publishReel,
+    } as never);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('RETRY_UNSUPPORTED');
+    expect(publishReel).not.toHaveBeenCalled();
+  });
+
+  it('never unpauses a paused mirror on success', async () => {
+    const { db, calls } = fakeDb({ mirrorRowOverride: { status: 'paused' } });
+    const publishReel = vi.fn().mockResolvedValue('fb_post_999');
+    const res = await handleRetryMirrorPost(retryRequest(), 'acme', mirrorId, postId, db, {
+      publishReel,
+    } as never);
+    expect(res.status).toBe(200);
+    expect((await res.json()).post.status).toBe('posted');
+    const mirrorUpdate = calls.find((c) => c.sql.includes('UPDATE mirrors'));
+    expect(mirrorUpdate?.params).toEqual([mirrorId, 'paused', null]);
   });
 });

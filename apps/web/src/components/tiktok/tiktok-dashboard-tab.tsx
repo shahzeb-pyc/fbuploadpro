@@ -1,10 +1,16 @@
 'use client';
 
 import * as React from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Image from 'next/image';
 
+import { api, buildTenantApiPath } from '@/lib/api';
+import { RetryMirrorPostResponseSchema } from '@/lib/api/schemas/tiktok-mirrors';
+import { queryKeys } from '@/lib/data/query-keys';
+import { Button } from '@/components/shared/ui/button';
 import { Card } from '@/components/shared/ui/card';
 import { StatusMark } from '@/components/shared/ui/status-mark';
+import { toast } from '@/components/shared/ui/toast';
 import type {
   MirrorDetailResponse,
   MirrorView,
@@ -49,11 +55,59 @@ function postStatusLabel(status: string): string {
 export interface TikTokDashboardTabProps {
   mirror: MirrorView;
   posts: MirrorDetailResponse['posts'];
+  subdomain: string;
+  mirrorId: string;
 }
 
-export function TikTokDashboardTab({ mirror, posts }: Readonly<TikTokDashboardTabProps>) {
+export function TikTokDashboardTab({
+  mirror,
+  posts,
+  subdomain,
+  mirrorId,
+}: Readonly<TikTokDashboardTabProps>) {
+  const queryClient = useQueryClient();
+  const tenant = queryKeys.tenant(subdomain);
   const mark = mirrorStatusMark(mirror.status);
   const last = mirror.lastMirroredPost;
+
+  // Manual retry for one pending post. Pending posts are never
+  // auto-retried; this mutation is the only retry path. The tab is
+  // shared by the Facebook detail view and the Instagram Auto
+  // Repost detail view, so both query-key families are invalidated
+  // (the miss is a no-op). A failed publish returns a 200 outcome
+  // with the row still pending, so the specific message toasts here
+  // instead of a generic failure.
+  const retryMutation = useMutation({
+    mutationFn: (postId: string) =>
+      api.post(
+        buildTenantApiPath(
+          subdomain,
+          `/tiktok-mirrors/${mirrorId}/posts/${postId}/retry`
+        ),
+        {},
+        { schema: RetryMirrorPostResponseSchema }
+      ),
+    onSuccess: (data) => {
+      void queryClient.invalidateQueries({
+        queryKey: tenant.tiktokMirrors.detail(mirrorId),
+      });
+      void queryClient.invalidateQueries({ queryKey: tenant.tiktokMirrors.list });
+      void queryClient.invalidateQueries({
+        queryKey: tenant.instagramAutoRepost.detail(mirrorId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: tenant.instagramAutoRepost.list,
+      });
+      if (data.post.status === 'posted') {
+        toast.success('Reel posted');
+      } else {
+        toast.error(data.post.error ?? 'Could not post this reel. Please try again.');
+      }
+    },
+    onError: () => {
+      toast.error('Could not retry this post. Please try again.');
+    },
+  });
   return (
     <div data-testid="tiktok-dashboard-tab" className="flex flex-col gap-6">
       <Card className="p-4">
@@ -152,6 +206,25 @@ export function TikTokDashboardTab({ mirror, posts }: Readonly<TikTokDashboardTa
                   </p>
                   {post.error ? (
                     <p className="mt-1 text-metadata text-signal-critical">{mapStoredMirrorErrorToDisplay(post.error)}</p>
+                  ) : null}
+                  {post.status === 'pending' &&
+                  (mirror.targetPlatform === 'facebook' ||
+                    mirror.targetPlatform === 'instagram') ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-2"
+                      data-testid={`tiktok-retry-btn-${post.id}`}
+                      disabled={
+                        retryMutation.isPending && retryMutation.variables === post.id
+                      }
+                      onClick={() => retryMutation.mutate(post.id)}
+                    >
+                      {retryMutation.isPending && retryMutation.variables === post.id
+                        ? 'Retrying…'
+                        : 'Retry'}
+                    </Button>
                   ) : null}
                 </div>
               </li>

@@ -184,7 +184,12 @@ export function IgAutoRepostDetailShell({ subdomain, mirrorId }: Readonly<IgAuto
         </div>
       </div>
 
-      <TikTokDashboardTab mirror={mirror} posts={posts} />
+      <TikTokDashboardTab
+        mirror={mirror}
+        posts={posts}
+        subdomain={subdomain}
+        mirrorId={mirrorId}
+      />
 
       <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
         <AlertDialogContent data-testid="ig-auto-repost-delete-confirm">

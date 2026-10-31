@@ -220,7 +220,12 @@ export function TikTokDetailShell({ subdomain, mirrorId }: Readonly<TikTokDetail
           <TabsTrigger value="insights">Insights</TabsTrigger>
         </TabsList>
         <TabsContent value="dashboard">
-          <TikTokDashboardTab mirror={mirror} posts={posts} />
+          <TikTokDashboardTab
+            mirror={mirror}
+            posts={posts}
+            subdomain={subdomain}
+            mirrorId={mirrorId}
+          />
         </TabsContent>
         <TabsContent value="insights">
           {mirror.targetDestinationId ? (
